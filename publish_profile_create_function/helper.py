@@ -10,13 +10,11 @@ def handle_max_retries(grade_error_data):
     table_id = "grade_no_profiles_error"
     errors_table = client.dataset(dataset_id).table(table_id)
 
-    # Check if the table exists, and create if it does not
     try:
         client.get_table(errors_table)
         print(f"Table {table_id} already exists.")
     except Exception:
         print(f"Table {table_id} does not exist. Creating table...")
-        # Define the schema for the grade_no_profiles_error table
         schema = [
             bigquery.SchemaField("iden_no", "STRING", mode="NULLABLE"),
             bigquery.SchemaField("event_id", "STRING", mode="NULLABLE"),
@@ -35,12 +33,10 @@ def handle_max_retries(grade_error_data):
             bigquery.SchemaField("updated_at", "TIMESTAMP", mode="NULLABLE")
         ]
 
-        # Create the table with the defined schema
         table = bigquery.Table(errors_table, schema=schema)
         table = client.create_table(table)
         print(f"Table {table_id} created.")
 
-    # Prepare rows for insertion with adjusted values
     error_rows = [
         {
             "iden_no": row["iden_no"],
@@ -62,9 +58,25 @@ def handle_max_retries(grade_error_data):
         for row in grade_error_data
     ]
 
-    # Insert rows into grade_no_profiles_error table
-    errors = client.insert_rows_json(errors_table, error_rows)
-    if errors:
-        print("Errors occurred during insertion:", errors)
+    existing_iden_nos = [row['iden_no'] for row in error_rows]
+    check_query = f"""
+        SELECT iden_no
+        FROM `{dataset_id}.{table_id}`
+        WHERE iden_no IN UNNEST(@iden_nos)
+    """
+
+    query_params = [bigquery.ArrayQueryParameter("iden_nos", "STRING", existing_iden_nos)]
+    existing_rows = client.query(check_query, job_config=bigquery.QueryJobConfig(query_parameters=query_params)).result()
+
+    existing_iden_nos_in_table = set(row["iden_no"] for row in existing_rows)
+
+    filtered_error_rows = [row for row in error_rows if row["iden_no"] not in existing_iden_nos_in_table]
+
+    if filtered_error_rows:
+        errors = client.insert_rows_json(errors_table, filtered_error_rows)
+        if errors:
+            print("Errors occurred during insertion:", errors)
+        else:
+            print(f"Inserted {len(filtered_error_rows)} records into {table_id} table.")
     else:
-        print(f"Inserted {len(error_rows)} records into error table.")
+        print(f"No new records to insert. All iden_no values already exist in the {table_id} table.")
