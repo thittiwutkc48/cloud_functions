@@ -1,0 +1,23 @@
+# Ignore macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+__MACOSX/
+
+# Thumbnails
+._*
+
+# Ignore Python cache and environment files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.env
+.venv
+
+# Ignore other unnecessary files
+*.log
