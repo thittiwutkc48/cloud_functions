@@ -12,7 +12,7 @@ publisher = pubsub_v1.PublisherClient()
 topic_path = "projects/single-loyalty-platform/topics/create-profile-topic"
 
 @functions_framework.http
-def publish_profile_create(request):
+def publish_profile_create_function(request):
     request_json = request.get_json(silent=True)
     event_name = request_json["event_name"]
 
