@@ -1,20 +1,25 @@
 from google.cloud import bigquery
 from datetime import datetime
 import pytz
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 bangkok_tz = pytz.timezone('Asia/Bangkok')
 
+stg_dataset = os.getenv('STG_DATASET')
+error_table=os.getenv('NO_PROFILE_ERROR_TABLE')
+
 def handle_max_retries(grade_error_data):
     client = bigquery.Client()
-    dataset_id = "slp_grading_stg"
-    table_id = "grade_no_profiles_error"
-    errors_table = client.dataset(dataset_id).table(table_id)
+    table = client.dataset(stg_dataset).table(error_table)
 
     try:
-        client.get_table(errors_table)
-        print(f"Table {table_id} already exists.")
+        client.get_table(table)
+        print(f"Table {error_table} already exists.")
     except Exception:
-        print(f"Table {table_id} does not exist. Creating table...")
+        print(f"Table {error_table} does not exist. Creating table...")
         schema = [
             bigquery.SchemaField("iden_no", "STRING", mode="NULLABLE"),
             bigquery.SchemaField("event_id", "STRING", mode="NULLABLE"),
@@ -33,9 +38,9 @@ def handle_max_retries(grade_error_data):
             bigquery.SchemaField("updated_at", "TIMESTAMP", mode="NULLABLE")
         ]
 
-        table = bigquery.Table(errors_table, schema=schema)
+        table = bigquery.Table(table, schema=schema)
         table = client.create_table(table)
-        print(f"Table {table_id} created.")
+        print(f"Table {error_table} created.")
 
     error_rows = [
         {
@@ -51,32 +56,42 @@ def handle_max_retries(grade_error_data):
             "birth_date": row["birth_date"],
             "profile_status": "CREATION_FAILED",
             "max_retry_count": 5,
-            "force_create": row["force_create"],  # Directly from source, expects field to be present
+            "force_create": row["force_create"],  
             "created_at": datetime.now(bangkok_tz).isoformat(), 
             "updated_at": datetime.now(bangkok_tz).isoformat()
         }
         for row in grade_error_data
     ]
 
-    existing_iden_nos = [row['iden_no'] for row in error_rows]
     check_query = f"""
-        SELECT iden_no
-        FROM `{dataset_id}.{table_id}`
-        WHERE iden_no IN UNNEST(@iden_nos)
+        SELECT iden_no, event_id
+        FROM `{stg_dataset}.{error_table}`
+        WHERE iden_no IN UNNEST(@iden_list) AND event_id IN UNNEST(@event_ids)
     """
 
-    query_params = [bigquery.ArrayQueryParameter("iden_nos", "STRING", existing_iden_nos)]
-    existing_rows = client.query(check_query, job_config=bigquery.QueryJobConfig(query_parameters=query_params)).result()
+    iden_ids = [row["iden_no"] for row in error_rows]
+    event_ids = [row["event_id"] for row in error_rows]
 
-    existing_iden_nos_in_table = set(row["iden_no"] for row in existing_rows)
+    query_params = [
+        bigquery.ArrayQueryParameter("iden_list", "STRING", iden_ids),
+        bigquery.ArrayQueryParameter("event_ids", "STRING", event_ids)
+    ]
 
-    filtered_error_rows = [row for row in error_rows if row["iden_no"] not in existing_iden_nos_in_table]
+    job_config = bigquery.QueryJobConfig(query_parameters=query_params)
+    existing_rows = client.query(check_query, job_config=job_config).result()
+
+    existing_pairs_in_table = set((row["iden_no"], row["event_id"]) for row in existing_rows)
+
+    filtered_error_rows = [
+        row for row in error_rows
+        if (row["iden_no"], row["event_id"]) not in existing_pairs_in_table
+    ]
 
     if filtered_error_rows:
-        errors = client.insert_rows_json(errors_table, filtered_error_rows)
+        errors = client.insert_rows_json(error_table, filtered_error_rows)
         if errors:
             print("Errors occurred during insertion:", errors)
         else:
-            print(f"Inserted {len(filtered_error_rows)} records into {table_id} table.")
+            print(f"Inserted {len(filtered_error_rows)} records into {error_table}.")
     else:
-        print(f"No new records to insert. All iden_no values already exist in the {table_id} table.")
+        print("No new records to insert. All matching iden_no and event_id pairs already exist in the table.")

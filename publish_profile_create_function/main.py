@@ -4,34 +4,39 @@ import json
 from datetime import datetime
 import pytz
 from helper import handle_max_retries
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 bangkok_tz = pytz.timezone('Asia/Bangkok')
 
 client = bigquery.Client()
 publisher = pubsub_v1.PublisherClient()
-topic_path = "projects/single-loyalty-platform/topics/create-profile-topic"
+topic_path = os.getenv('TOPIC_PATH')
+stg_dataset = os.getenv('STG_DATASET')
+profile_dataset = os.getenv('PROFILE_DATASET')
+profile_table = os.getenv('PROFILE_TABLE')
+no_profile_table = os.getenv('NO_PROFILE_TABLE')
 
 @functions_framework.http
 def publish_profile_create_function(request):
-    request_json = request.get_json(silent=True)
-    event_name = request_json["event_name"]
 
+    request_json = request.get_json(silent=True)    
+    event_name = request_json.get("event_name") if request_json else None
+    print(event_name)
+    
     if event_name == "COMPAREGRADE" :
-        print("Event:COMPAREGRADE")
-        stg_dataset_name = "slp_grading_stg"
-        pf_dataset_name = "slp_profile_lz"
-        pf_table_name = "profile_identifiers"
-        grade_table_name = "grade_no_profiles"
         grade_error_data = []
         merge_query = f"""
-        MERGE INTO {stg_dataset_name}.{grade_table_name} AS TARGET
+        MERGE INTO {stg_dataset}.{no_profile_table} AS TARGET
         USING (
-            SELECT grade.iden_no , profile_status , updated_at
-            FROM {stg_dataset_name}.{grade_table_name} grade
-            LEFT JOIN {pf_dataset_name}.{pf_table_name} idx USING (iden_no)
+            SELECT grade.iden_no , grade.event_id , profile_status , updated_at
+            FROM {stg_dataset}.{no_profile_table} grade
+            LEFT JOIN {profile_dataset}.{profile_table} idx USING (iden_no)
             WHERE idx.iden_no IS NOT NULL
         ) AS SOURCE
-        ON TARGET.iden_no = SOURCE.iden_no
+        ON TARGET.iden_no = SOURCE.iden_no AND TARGET.event_id = SOURCE.event_id
         WHEN MATCHED THEN
         UPDATE SET
             TARGET.profile_status = 'CREATION_SUCCESS',
@@ -42,7 +47,7 @@ def publish_profile_create_function(request):
         print("MERGE query executed successfully.")
         
         select_query = f"""
-        SELECT * FROM {stg_dataset_name}.{grade_table_name}
+        SELECT * FROM {stg_dataset}.{no_profile_table}
         WHERE profile_status = 'CREATION_PENDING' AND retry_count <= 5
         """
         results = client.query(select_query).result()
@@ -96,7 +101,7 @@ def publish_profile_create_function(request):
 
 
         update_query = f"""
-            UPDATE {stg_dataset_name}.{grade_table_name}
+            UPDATE {stg_dataset}.{no_profile_table}
             SET retry_count = retry_count + 1,
                 updated_at = CURRENT_TIMESTAMP()
             WHERE profile_status = 'CREATION_PENDING' AND retry_count < 5

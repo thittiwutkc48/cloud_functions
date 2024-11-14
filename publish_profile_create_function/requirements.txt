@@ -2,3 +2,5 @@ functions_framework
 google-cloud-bigquery
 google-cloud-pubsub
 pytz
+python-dotenv
+
